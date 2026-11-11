@@ -1,0 +1,94 @@
+{#
+    ### _gauges.html
+
+    ゲージ部分のHTML断片。
+    `index.html` から include され、`GET /partials/gauges` では単体で返される。
+
+    | 変数 | 型 | 説明 |
+    | --- | --- | --- |
+    | `memory` | `MemoryUsage` | メモリ使用量 (`metrics.py`) |
+    | `memory_gauge` | `Gauge` | メモリ使用率ゲージの描画パラメータ (`gauge.py`) |
+    | `cpu` | `CpuUsage` | CPU使用率 (`metrics.py`) |
+    | `cpu_gauge` | `Gauge` | CPU使用率ゲージの描画パラメータ (`gauge.py`) |
+#}
+{#
+    #### `gauge(g, label)` マクロ
+
+    半円ゲージの `<svg>` を出力する。座標の計算は `gauge.py` の `build_gauge` が済ませている。
+
+    | 引数 | 型 | 説明 |
+    | --- | --- | --- |
+    | `g` | `Gauge` | 描画パラメータ |
+    | `label` | `str` | ゲージ中央下に表示する文字列 |
+
+    | 戻り値 | 型 | 説明 |
+    | --- | --- | --- |
+    | SVG | `Markup` | `<svg>` 要素 |
+#}
+{% macro gauge(g, label) -%}
+<svg class="gauge" viewBox="0 0 {{ g.view_width }} {{ g.view_height }}" role="img" aria-label="{{ label }}">
+    <!-- 背景の半円 -->
+    <path d="{{ g.arc_path }}" fill="none" stroke="#eee" stroke-width="{{ g.stroke_width }}" />
+
+    <!-- 値の半円 -->
+    <path
+        d="{{ g.arc_path }}"
+        fill="none"
+        stroke="{{ g.color }}"
+        stroke-width="{{ g.stroke_width }}"
+        stroke-linecap="butt"
+        stroke-dasharray="{{ g.value_length }} {{ g.arc_length }}"
+    />
+
+    <!-- 目盛り -->
+    {% for t in g.ticks %}
+    <line x1="{{ t.x1 }}" y1="{{ t.y1 }}" x2="{{ t.x2 }}" y2="{{ t.y2 }}" stroke="#666" stroke-width="0.5" />
+    {% endfor %}
+
+    <!-- 針 -->
+    <line
+        x1="{{ g.center_x }}" y1="{{ g.center_y }}"
+        x2="{{ g.needle_x }}" y2="{{ g.needle_y }}"
+        stroke="#000"
+        stroke-width="0.5"
+    />
+
+    <!-- 中心の丸 -->
+    <circle cx="{{ g.center_x }}" cy="{{ g.center_y }}" r="{{ g.hub_radius }}" fill="#000" />
+
+    <!-- 数値 -->
+    <text
+        x="{{ g.center_x }}" y="{{ g.view_height - 2 }}"
+        text-anchor="middle"
+        font-size="5"
+        font-weight="bold"
+        fill="currentColor"
+    >{{ label }}</text>
+</svg>
+{%- endmacro %}
+
+<div class="d-flex flex-wrap justify-content-start gap-3 pt-3">
+    <div class="card shadow-sm text-center metric-card">
+        <div class="card-header text-start fw-bold">
+            メモリ使用量
+        </div>
+        <div class="card-body">
+            {{ gauge(memory_gauge, "%.1f%%"|format(memory.percent)) }}
+            <div class="small text-body-secondary mt-2">
+                使用 {{ "%.2f"|format(memory.used_gib) }} GiB / 合計 {{ "%.2f"|format(memory.total_gib) }} GiB
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm text-center metric-card">
+        <div class="card-header text-start fw-bold">
+            CPU使用率
+        </div>
+        <div class="card-body">
+            {{ gauge(cpu_gauge, "%.1f%%"|format(cpu.percent)) }}
+            <div class="small text-body-secondary mt-2">
+                全 {{ cpu.cores }} コアの平均
+            </div>
+        </div>
+    </div>
+</div>

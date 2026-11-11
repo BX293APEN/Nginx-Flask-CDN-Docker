@@ -1,0 +1,164 @@
+# This file path : /${ENTRY_DIR}/${WS}/nginx/config/nginx.conf.template
+#
+# ユーザからのリクエストを全て受け、/static/ はキャッシュして返し、それ以外は origin へ中継する。
+#
+# このファイルはテンプレート。`start.sh` が `envsubst` で .env の値を埋め込み、
+# /${ENTRY_DIR}/${WS}/nginx/run/nginx.conf を生成して nginx に読ませる。
+# 設定を変えたら `docker compose restart` (nginx.conf も再生成される)
+#
+# | 埋め込む変数 | 内容 | 出どころ |
+# | --- | --- | --- |
+# | `${ORIGIN_HOST}` | originのIPアドレスまたはホスト名 | .env |
+# | `${ORIGIN_PORT}` | originの公開ポート | .env |
+# | `${CACHE_MAX_SIZE}` | キャッシュの最大容量 | .env |
+# | `${CACHE_INACTIVE}` | 未アクセスのキャッシュを削除するまでの期間 | .env |
+#
+# nginx 自身の変数 (`$uri` など) は埋め込み対象外なのでそのまま書く
+
+worker_processes auto;
+pid run/nginx.pid;
+error_log run/error.log;
+
+events {
+    worker_connections 4096;
+}
+
+http {
+    # | 項目 | 内容 |
+    # | --- | --- |
+    # | `$upstream_cache_status` | HIT / MISS / EXPIRED / STALE / UPDATING / REVALIDATED のいずれか |
+    # | `$request_time` | リクエストの処理時間(秒) |
+    log_format cdn '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
+                   'cache=$upstream_cache_status time=$request_time';
+
+    access_log run/access.log cdn;
+    client_body_temp_path run/tmp/client_body;
+    proxy_temp_path       run/tmp/proxy;
+    fastcgi_temp_path     run/tmp/fastcgi;
+    uwsgi_temp_path       run/tmp/uwsgi;
+    scgi_temp_path        run/tmp/scgi;
+
+    # 拡張子からContent-Typeを判別するための定義(システム標準のものを利用)
+    include      /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    server_tokens off;
+    sendfile      on;
+    tcp_nopush    on;
+    tcp_nodelay   on;
+    keepalive_timeout 65;
+
+    # テキスト系を圧縮して配信する。
+    # originには圧縮なし(identity)で取りに行くので、キャッシュには非圧縮の1種類だけが入り、
+    # 圧縮はここで毎回行う (Accept-Encoding の違いでキャッシュが混ざらない)
+    gzip            on;
+    gzip_vary       on;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_proxied    any;
+    gzip_types      text/css text/plain text/javascript application/javascript application/json image/svg+xml;
+
+    # | 項目 | 内容 | 備考 |
+    # | --- | --- | --- |
+    # | パス | /var/cache/cdn/nginx | 名前付きボリューム `cdn_cache` (コンテナを作り直しても残る) |
+    # | levels | 1:2 | キャッシュファイルを2階層のフォルダに分散する |
+    # | keys_zone | cdn:10m | キーの索引用メモリ。10MBで約8万ファイル分 |
+    # | max_size | ${CACHE_MAX_SIZE} | 超えたら古いものから削除 |
+    # | inactive | ${CACHE_INACTIVE} | この期間アクセスが無ければ削除 |
+    # | use_temp_path | off | 一時ファイルを経由せずキャッシュに直接書く |
+    proxy_cache_path /var/cache/cdn/nginx levels=1:2 keys_zone=cdn:10m
+                     max_size=${CACHE_MAX_SIZE} inactive=${CACHE_INACTIVE} use_temp_path=off;
+
+    # | 項目 | 内容 | 備考 |
+    # | --- | --- | --- |
+    # | server | `${ORIGIN_HOST}:${ORIGIN_PORT}` | 起動時に名前解決する (別端末ならIPアドレス指定が確実) |
+    # | keepalive | 16 | originとの接続を使い回す |
+    upstream origin {
+        server ${ORIGIN_HOST}:${ORIGIN_PORT};
+        keepalive 16;
+    }
+
+    server {
+        # コンテナ内の待受ポート (ホストの ${CDN_PORT} → ここ にマッピングされる)
+        listen      80;
+        server_name _;
+
+        # | location | 処理 | 備考 |
+        # | --- | --- | --- |
+        # | /healthz | CDN自身の死活確認 | originには問い合わせない |
+        # | /static/ | originから取得してキャッシュし、配信する | GET / HEAD のみ |
+        # | / (上記以外すべて) | originへそのまま中継する | ページ・APIはキャッシュしない |
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        location /static/ {
+            limit_except GET HEAD {
+                deny all;
+            }
+
+            proxy_pass http://origin;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # originに圧縮させない (上記gzipの説明を参照)
+            proxy_set_header Accept-Encoding "";
+
+            # originの Vary は使わない (キャッシュが圧縮方式ごとに分かれるのを防ぐ)。
+            # クライアント向けの Vary: Accept-Encoding は上記 gzip_vary が付ける
+            proxy_ignore_headers Vary;
+            proxy_hide_header    Vary;
+
+            proxy_connect_timeout 3s;
+            proxy_read_timeout    15s;
+
+            # | 項目 | 内容 |
+            # | --- | --- |
+            # | proxy_cache_key | Hostを含めない。`?v=` 付きURLごとに別のキャッシュになる |
+            # | proxy_cache_valid | originが Cache-Control を返さなかった時の保険 (返した場合はそちらが優先される) |
+            # | proxy_cache_lock | 同じファイルへの同時リクエストは、originへの取得を1回にまとめる |
+            # | proxy_cache_revalidate | 期限切れ時は ETag / Last-Modified で確認し、変更が無ければ再取得しない |
+            # | proxy_cache_use_stale | originが落ちていても、期限切れのキャッシュで配信を続ける |
+            # | proxy_cache_background_update | 期限切れ時は古いものを即座に返し、裏で更新する |
+            proxy_cache                   cdn;
+            proxy_cache_key               $uri$is_args$args;
+            proxy_cache_valid             200 301 302 1h;
+            proxy_cache_valid             404 1m;
+            proxy_cache_lock              on;
+            proxy_cache_lock_timeout      5s;
+            proxy_cache_revalidate        on;
+            proxy_cache_use_stale         error timeout invalid_header updating http_500 http_502 http_503 http_504;
+            proxy_cache_background_update on;
+
+            # | ヘッダ | 内容 |
+            # | --- | --- |
+            # | X-Cache-Status | HIT なら CDN のキャッシュから返した (動作確認用) |
+            # | Timing-Allow-Origin | ブラウザの Resource Timing で詳細を見られるようにする |
+            #
+            # Cache-Control は origin の値をそのまま通す (?v= 付きは1年 immutable)
+            add_header X-Cache-Status   $upstream_cache_status always;
+            add_header Timing-Allow-Origin * always;
+        }
+
+        # ページ・API: キャッシュせず、そのまま origin へ中継する
+        location / {
+            proxy_pass http://origin;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            proxy_connect_timeout 3s;
+            proxy_read_timeout    60s;
+        }
+    }
+}

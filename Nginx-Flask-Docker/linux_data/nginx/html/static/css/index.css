@@ -1,0 +1,10 @@
+/* # index.css : トップページ用スタイル (nginxが直接配信) */
+
+/* ## ゲージ
+   | クラス | 説明 |
+   | --- | --- |
+   | `.gauge` | ゲージ(SVG)。カードの幅いっぱいに広げる |
+   | `.metric-card` | ゲージ1つ分のカード。幅は 300px(ゲージ) + 32px(左右padding 1rem x 2) + 2px(枠線) = 334px。狭い画面では縮む |
+*/
+.gauge       { display: block; width: 100%; height: auto; }
+.metric-card { width: 334px; max-width: 100%; }

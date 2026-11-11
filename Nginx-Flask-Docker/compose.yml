@@ -1,0 +1,89 @@
+# ==========================================
+# compose.yml
+#
+# | 項目 | 内容 | 備考 |
+# | --- | --- | --- |
+# | services | 作成したいサービスを列挙 | YAMLはスペース2つ |
+# | nginx | 作成するサービスの名前 | docker composeで管理する際に必要 |
+#
+# # 起動手順
+# 1. `docker compose up --build -d`
+# 2. (CDNを使う場合) CDN側 (Nginx-Flask-CDN-Docker) を起動し、http://(CDNのIPアドレス) にアクセス
+#    (CDNを使わない場合) http://(localhost|ホストのIPアドレス):${PORT} にアクセス
+#
+# | 構成 | ユーザのアクセス先 | このコンテナへの接続元 |
+# | --- | --- | --- |
+# | CDNあり | CDN の `CDN_PORT` (既定 80) | CDN だけ (ホストの `${PORT}`、既定 8080) |
+# | CDNなし | このホストの `${PORT}` | ユーザ |
+#
+# ==========================================
+
+services:
+  nginx:
+    # ==========================================
+    # nginxサービスの設定項目 (nginx + Flask を同一コンテナで起動)
+    #
+    # | 項目 | 内容 | 備考 |
+    # | --- | --- | --- |
+    # | container_name | コンテナ名 | 外部から見た時の名前 |
+    # | hostname | ホスト名 | - |
+    # | build | Dockerfileの設定 | - |
+    # | volumes | マウントするフォルダ設定(データを永続化) | ホストディレクトリ: コンテナ内ディレクトリ |
+    # | restart | コンテナの起動設定 | no unless-stopped always ... |
+    # | environment | コンテナ内の環境変数を設定 | Python の `os.environ.get` 等でも取得可能 |
+    # | ports | 外部からアクセス可能なポートを設定 | ホストマシンのポート番号:コンテナのポート番号 |
+    # | command | サービスが起動したときに実行するコマンド | - |
+    # ==========================================
+    env_file: .env
+    
+    container_name: ${NGINX_CONTAINER_NAME}
+
+    hostname: ${NGINX_CONTAINER_NAME}
+
+    build: 
+      # ==========================================
+      # Dockerfileの設定項目
+      #
+      # | 項目 | 内容 |
+      # | --- | --- |
+      # | context/dockerfile | Dockerfileへの相対パス |
+      # | args | Dockerfile内の環境変数を設定 |
+      #
+      # ==========================================
+      context: ${Dockerfile_DIR}
+      dockerfile: ${Dockerfile}
+      args:
+        WS:           ${WS}
+        USER_NAME:    ${USER_NAME}
+        PASSWORD:     ${PASSWORD}
+        ENTRY_DIR:    ${ENTRY_DIR}
+        ENTRY_POINT:  ${ENTRY_POINT}
+        LANG:         ${LANG}
+
+    volumes:
+      - ${VOLUME}:/${ENTRY_DIR}/${WS}
+
+    restart: unless-stopped
+
+    environment:
+      # ==========================================
+      # コンテナ内の環境変数の設定項目
+      #
+      # | 項目 | 内容 |
+      # | --- | --- |
+      # | TZ / LANG | タイムゾーン / ロケール |
+      # | FLASK_PORT | gunicornの待受ポート (`start.sh`が参照) |
+      # | FLASK_WORKERS | gunicornのワーカー数 (`start.sh`が参照) |
+      #
+      # ==========================================
+      - TZ=${TIME_ZONE}
+      - LANG=${LANG}
+      - FLASK_PORT=${FLASK_PORT}
+      - FLASK_WORKERS=${FLASK_WORKERS}
+    
+    # ホストの${PORT}(既定8080) → コンテナ内nginxの3000
+    ports:
+      - "${PORT}:3000"
+
+    command:
+      - /${ENTRY_DIR}/${ENTRY_POINT}

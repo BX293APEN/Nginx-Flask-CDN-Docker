@@ -1,0 +1,46 @@
+{#
+    ### index.html
+
+    トップページ。ゲージ部分は `_gauges.html` を include し、以降は `static/js/index.js` が定期的に差し替える。
+
+    | 変数 | 型 | 説明 |
+    | --- | --- | --- |
+    | `refresh_sec` | `int` | ゲージの更新間隔(秒)。`#gauges` の `data-interval` に渡す |
+    | `static_url` | `Callable[[str], str]` | 静的ファイルのURLを作る関数。内容ハッシュ(`?v=`)付き (`app.py`) |
+    | `memory` `memory_gauge` `cpu` `cpu_gauge` | - | `_gauges.html` を参照 |
+#}
+<!DOCTYPE html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>System Monitor</title>
+        <!-- /static/ は nginx が直接配信する (CDN経由ならCDNがキャッシュする)。URL末尾の ?v= は内容ハッシュ -->
+        <link rel="icon" href="{{ static_url('img/pen.svg') }}" type="image/svg+xml">
+        <link rel="stylesheet" href="{{ static_url('css/bootstrap.min.css') }}">
+        <link rel="stylesheet" href="{{ static_url('css/index.css') }}">
+        <script src="{{ static_url('js/index.js') }}" defer></script>
+    </head>
+    <body>
+        <header data-bs-theme="dark">
+            <nav class="navbar navbar-dark sticky-top bg-dark">
+                <div class="container-fluid">
+                    <span class="navbar-brand d-flex align-items-center gap-2">
+                        <img src="{{ static_url('img/pen.svg') }}" height="40" width="40" alt="">
+                        System Monitor
+                    </span>
+                    <!-- 最終更新時刻(ブラウザ側で index.js が書き込む) -->
+                    <span class="navbar-text small" id="updated"></span>
+                </div>
+            </nav>
+        </header>
+
+        <div class="container pt-3">
+            <main>
+                <div id="gauges" data-interval="{{ refresh_sec }}">
+                    {% include "_gauges.html" %}
+                </div>
+            </main>
+        </div>
+    </body>
+</html>

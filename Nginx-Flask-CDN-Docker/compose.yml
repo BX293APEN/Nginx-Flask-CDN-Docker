@@ -1,0 +1,108 @@
+# ==========================================
+# compose.yml (CDN / エッジnginx)
+#
+# Nginx-Flask-Docker (origin) の手前に置くCDN。
+# ユーザからのリクエストを全て受け、/static/ はキャッシュして返し、それ以外 (ページ・API) は origin へ中継する。
+#
+#   ユーザ ── CDN_PORT (80) ──→ CDN ── ORIGIN_HOST:ORIGIN_PORT (8080) ──→ origin
+#
+# | 項目 | 内容 | 備考 |
+# | --- | --- | --- |
+# | services | 作成したいサービスを列挙 | YAMLはスペース2つ |
+# | cdn | 作成するサービスの名前 | docker composeで管理する際に必要 |
+#
+# # 起動手順
+# 1. origin (Nginx-Flask-Docker) を起動しておく (別の端末でよい)
+# 2. .env の `ORIGIN_HOST` (originのIPアドレス) と `ORIGIN_PORT` を設定する
+# 3. このプロジェクトで `docker compose up --build -d`
+# 4. http://(CDNのIPアドレス):${CDN_PORT}/healthz が `ok` を返せば起動済み。同じアドレスでWebアプリを開く
+#
+# ==========================================
+
+services:
+  cdn:
+    # ==========================================
+    # cdnサービスの設定項目
+    #
+    # | 項目 | 内容 | 備考 |
+    # | --- | --- | --- |
+    # | container_name | コンテナ名 | 外部から見た時の名前 |
+    # | hostname | ホスト名 | - |
+    # | build | Dockerfileの設定 | - |
+    # | volumes | マウントするフォルダ設定 | 下表 |
+    # | restart | コンテナの起動設定 | no unless-stopped always ... |
+    # | environment | コンテナ内の環境変数を設定 | `start.sh` が nginx.conf を生成する際に参照 |
+    # | ports | 外部からアクセス可能なポートを設定 | ホストマシンのポート番号:コンテナのポート番号 |
+    # | extra_hosts | 追加の名前解決 | `host.docker.internal` = このコンテナのホスト (originが同じ端末にある場合に使う) |
+    # | healthcheck | 死活確認 | `docker compose ps` の STATUS に反映される |
+    # | command | サービスが起動したときに実行するコマンド | - |
+    #
+    # | volumes | 用途 | 備考 |
+    # | --- | --- | --- |
+    # | ${VOLUME}:/${ENTRY_DIR}/${WS} | nginx.conf.template・ログ | ホストから編集・閲覧できる |
+    # | cdn_cache:/var/cache/cdn | キャッシュ本体 | 名前付きボリューム。bind mount より速く、コンテナを作り直しても残る |
+    # ==========================================
+    env_file: .env
+
+    container_name: ${CDN_CONTAINER_NAME}
+
+    hostname: ${CDN_CONTAINER_NAME}
+
+    build:
+      # ==========================================
+      # Dockerfileの設定項目
+      #
+      # | 項目 | 内容 |
+      # | --- | --- |
+      # | context/dockerfile | Dockerfileへの相対パス |
+      # | args | Dockerfile内の環境変数を設定 |
+      #
+      # ==========================================
+      context: ${Dockerfile_DIR}
+      dockerfile: ${Dockerfile}
+      args:
+        WS:           ${WS}
+        USER_NAME:    ${USER_NAME}
+        ENTRY_DIR:    ${ENTRY_DIR}
+        ENTRY_POINT:  ${ENTRY_POINT}
+
+    volumes:
+      - ${VOLUME}:/${ENTRY_DIR}/${WS}
+      - cdn_cache:/var/cache/cdn
+
+    restart: unless-stopped
+
+    environment:
+      - TZ=${TIME_ZONE}
+      - ORIGIN_HOST=${ORIGIN_HOST}
+      - ORIGIN_PORT=${ORIGIN_PORT}
+      - CACHE_MAX_SIZE=${CACHE_MAX_SIZE}
+      - CACHE_INACTIVE=${CACHE_INACTIVE}
+
+    # ホストの${CDN_PORT}(既定80) → コンテナ内nginxの80
+    ports:
+      - "${CDN_PORT}:80"
+
+    # `host.docker.internal` を Linux でも使えるようにする (Docker Desktop では標準で使える)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+    command:
+      - /${ENTRY_DIR}/${ENTRY_POINT}
+
+# ==========================================
+# ボリュームの設定項目
+#
+# | 項目 | 内容 | 備考 |
+# | --- | --- | --- |
+# | cdn_cache | CDNのキャッシュ | 空にしたい時は `docker compose down -v` |
+#
+# ==========================================
+volumes:
+  cdn_cache:
